@@ -1,0 +1,14 @@
+{
+  "name": "video-factory",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "validate:workflows": "node scripts/validate-workflows.mjs",
+    "deploy:n8n": "node scripts/deploy-n8n.mjs",
+    "export:n8n": "node scripts/export-n8n.mjs"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5"
+  }
+}
