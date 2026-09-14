@@ -3,12 +3,16 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "validate:workflows": "node scripts/validate-workflows.mjs",
     "deploy:n8n": "node scripts/deploy-n8n.mjs",
     "export:n8n": "node scripts/export-n8n.mjs"
   },
   "dependencies": {
-    "dotenv": "^16.4.5"
+    "dotenv": "^16.4.5",
+    "pg": "^8.13.1"
   }
 }
