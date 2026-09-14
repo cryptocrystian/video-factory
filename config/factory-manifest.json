@@ -1,0 +1,45 @@
+{
+  "factory": {
+    "namespace": "video_factory",
+    "workflowPrefix": "VF -",
+    "supabaseProjectRef": "gnpjcfsizzozxcolbcyz",
+    "supabaseSchema": "video_factory"
+  },
+  "workflows": [
+    {
+      "key": "episode_production",
+      "name": "VF - Episode Production v1",
+      "file": "workflows/episode-production.json",
+      "managed": true,
+      "activateOnDeploy": false
+    },
+    {
+      "key": "generation_worker",
+      "name": "VF - Generation Worker v1",
+      "file": "workflows/generation-worker.json",
+      "managed": true,
+      "activateOnDeploy": false
+    },
+    {
+      "key": "provider_poll",
+      "name": "VF - Provider Poll v1",
+      "file": "workflows/provider-poll.json",
+      "managed": true,
+      "activateOnDeploy": false
+    },
+    {
+      "key": "render_worker",
+      "name": "VF - Render Worker v1",
+      "file": "workflows/render-worker.json",
+      "managed": true,
+      "activateOnDeploy": false
+    },
+    {
+      "key": "publish_worker",
+      "name": "VF - Publish Worker v1",
+      "file": "workflows/publish-worker.json",
+      "managed": true,
+      "activateOnDeploy": false
+    }
+  ]
+}
