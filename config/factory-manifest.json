@@ -5,6 +5,49 @@
     "supabaseProjectRef": "gnpjcfsizzozxcolbcyz",
     "supabaseSchema": "video_factory"
   },
+  "routing": {
+    "profile": "synthetic-frontier-v1",
+    "strategy": "QUALITY_FIRST",
+    "selectionOrder": [
+      "quality_threshold",
+      "capability_match",
+      "provider_reliability",
+      "effective_price",
+      "latency"
+    ],
+    "discountPolicy": "promotions_can_break_provider_ties_but_never_lower_model_quality",
+    "premiumExceptionRequiresApproval": true,
+    "modelClasses": {
+      "STATIC_HERO": [
+        "gpt_image_2_5_sunburst",
+        "flux_2_max"
+      ],
+      "STANDARD_CINEMATIC_MOTION": [
+        "minimax_h3_max_turbo",
+        "minimax_h3_max",
+        "kling_3"
+      ],
+      "PRECISE_MULTI_SHOT": [
+        "kling_3",
+        "seedance_2_5"
+      ],
+      "HEAVY_MULTIMODAL": [
+        "seedance_2_5",
+        "kling_3"
+      ],
+      "PREMIUM_EXCEPTION": [
+        "veo_3_1"
+      ],
+      "NARRATION": [
+        "elevenlabs_multilingual_v2"
+      ]
+    }
+  },
+  "providers": {
+    "production": ["fal", "kie"],
+    "interactivePrototypeOnly": ["higgsfield"],
+    "providerSelection": "choose_model_first_then_choose_best_verified_provider_offer"
+  },
   "workflows": [
     {
       "key": "episode_production",
