@@ -10,7 +10,8 @@
     "check:n8n": "node scripts/check-n8n.mjs",
     "validate:workflows": "node scripts/validate-workflows.mjs",
     "deploy:n8n": "node scripts/deploy-n8n.mjs",
-    "export:n8n": "node scripts/export-n8n.mjs"
+    "export:n8n": "node scripts/export-n8n.mjs",
+    "route:preview": "node scripts/route-preview.mjs"
   },
   "dependencies": {
     "dotenv": "^16.4.5",
