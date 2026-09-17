@@ -80,8 +80,8 @@ async function syncRegistry(db, workflowKey, n8nWorkflow) {
            updated_at = now(),
            config = coalesce(config, '{}'::jsonb) || jsonb_build_object(
              'managed_by', 'video-factory-repo',
-             'manifest_key', $2,
-             'n8n_name', $3,
+             'manifest_key', $2::text,
+             'n8n_name', $3::text,
              'last_deployed_at', now()
            )
      where workflow_name = $4`,
