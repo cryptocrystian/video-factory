@@ -48,7 +48,9 @@ async function n8n(method, pathname, body) {
 }
 
 function sanitizeForApi(workflow) {
-  const allowed = ['name', 'nodes', 'connections', 'settings', 'staticData', 'pinData', 'meta'];
+  // n8n 2.x treats fields such as meta as read-only on workflow create/update.
+  // Keep deployment payloads intentionally minimal and portable.
+  const allowed = ['name', 'nodes', 'connections', 'settings'];
   return Object.fromEntries(
     allowed.filter((key) => workflow[key] !== undefined).map((key) => [key, workflow[key]])
   );
