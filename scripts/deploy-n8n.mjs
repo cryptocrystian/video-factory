@@ -98,7 +98,15 @@ const db = new Client({ connectionString: process.env.VIDEO_FACTORY_DB_URL });
 await db.connect();
 
 try {
-  for (const entry of manifest.workflows.filter((w) => w.managed)) {
+  // Optional scope: --only=key1,key2 deploys just those manifest keys.
+  const onlyArg = process.argv.find((a) => a.startsWith('--only='));
+  const only = onlyArg ? new Set(onlyArg.slice('--only='.length).split(',').filter(Boolean)) : null;
+  if (only) {
+    const unknown = [...only].filter((k) => !manifest.workflows.some((w) => w.key === k));
+    if (unknown.length) throw new Error(`Unknown workflow key(s) for --only: ${unknown.join(', ')}`);
+  }
+
+  for (const entry of manifest.workflows.filter((w) => w.managed && (!only || only.has(w.key)))) {
     if (!entry.name.startsWith(workflowPrefix)) {
       throw new Error(`Refusing to deploy non-Video Factory workflow: ${entry.name}`);
     }
