@@ -1,5 +1,8 @@
-import 'dotenv/config';
+import process from 'node:process';
+import dotenv from 'dotenv';
 import pg from 'pg';
+
+dotenv.config({ path: '.env.local' });
 
 const { Client } = pg;
 
