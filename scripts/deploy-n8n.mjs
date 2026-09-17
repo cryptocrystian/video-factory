@@ -6,7 +6,6 @@ import pg from 'pg';
 
 const { Client } = pg;
 dotenv.config({ path: '.env.local' });
-dotenv.config();
 
 const root = process.cwd();
 const manifest = JSON.parse(
@@ -73,7 +72,7 @@ async function activateWorkflow(id) {
 }
 
 async function syncRegistry(db, workflowKey, n8nWorkflow) {
-  await db.query(
+  const result = await db.query(
     `update video_factory.workflow_definitions
        set external_workflow_id = $1,
            updated_at = now(),
@@ -86,6 +85,10 @@ async function syncRegistry(db, workflowKey, n8nWorkflow) {
      where workflow_name = $4`,
     [String(n8nWorkflow.id), workflowKey, n8nWorkflow.name, workflowKey]
   );
+
+  if (result.rowCount !== 1) {
+    throw new Error(`Workflow registry sync failed for ${workflowKey}; expected 1 row, updated ${result.rowCount}`);
+  }
 }
 
 const workflowsInN8n = await listAllWorkflows();
