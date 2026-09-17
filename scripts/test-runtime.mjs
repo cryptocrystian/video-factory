@@ -498,6 +498,63 @@ async function main() {
       check('Kie fail: attempt FAILED with raw response', att.status === 'FAILED' && /GENERATION_FAILED/.test(att.error_message) && att.response_payload.failure.raw_response.data.state === 'fail');
     });
 
+    // Kie envelope codes are not authoritative: its own get-task-detail docs show
+    // code 505 next to a completed task, so data.state must decide on HTTP 2xx.
+    await scenario('Provider Poll: Kie HTTP 200 + code 505 + state success -> SUCCEEDED', async () => {
+      const job = await waitingJob('kie');
+      const calls = [];
+      await new Engine(POLL, { db, http: mockHttp([[() => true, () => ({ statusCode: 200, body: { code: 505, msg: 'success', data: { taskId: 'kie-task-poll', state: 'success', resultJson: '{"resultUrls":["https://tempfile.aiquickdraw.com/dryrun/out505.mp4"]}', failCode: '', failMsg: '', creditsConsumed: 7 } } })]], calls) }).run('Manual Trigger');
+      const j = await jobRow(job.id);
+      const assets = await q(`select * from video_factory.assets where generation_job_id = $1`, [job.id]);
+      const [att] = await attemptsOf(job.id);
+      check('code 505 + success: job DONE (state wins over envelope code)', j.status === 'DONE', j.status);
+      check('code 505 + success: asset created from resultUrls', assets.length === 1 && assets[0].uri.endsWith('out505.mp4'));
+      check('code 505 + success: attempt SUCCEEDED', att.status === 'SUCCEEDED');
+    });
+
+    await scenario('Provider Poll: Kie HTTP 200 + code 505 + state waiting -> PENDING', async () => {
+      const job = await waitingJob('kie');
+      const calls = [];
+      const e = await new Engine(POLL, { db, http: mockHttp([[() => true, () => ({ statusCode: 200, body: { code: 505, msg: 'queued', data: { taskId: 'kie-task-poll', state: 'waiting', resultJson: '', failCode: '', failMsg: '' } } })]], calls) }).run('Manual Trigger');
+      const j = await jobRow(job.id);
+      const [att] = await attemptsOf(job.id);
+      check('code 505 + waiting: job stays WAITING_PROVIDER, lease released', j.status === 'WAITING_PROVIDER' && j.worker_id === null, j.status);
+      check('code 505 + waiting: not failed and not completed', j.attempts === 1 && j.actual_cost === null && att.status === 'WAITING_PROVIDER');
+      check('code 505 + waiting: last_poll PENDING recorded', att.response_payload.last_poll && att.response_payload.last_poll.status === 'PENDING', JSON.stringify(att.response_payload.last_poll));
+      check('code 505 + waiting: path ends at Release Poll Lease', e.path.at(-1) === 'Release Poll Lease', e.path.join(' > '));
+    });
+
+    await scenario('Provider Poll: Kie HTTP 200 with no data -> failure, never completion', async () => {
+      const job = await waitingJob('kie');
+      await new Engine(POLL, { db, http: mockHttp([[() => true, () => ({ statusCode: 200, body: { code: 200, msg: 'ok' } })]], []) }).run('Manual Trigger');
+      const j = await jobRow(job.id);
+      check('no data: job failed for retry, nothing completed', j.status === 'PENDING' && /no task state/.test(j.last_error || ''), `${j.status} ${j.last_error}`);
+      check('no data: no asset created', (await q(`select count(*)::int n from video_factory.assets where generation_job_id = $1`, [job.id]))[0].n === 0);
+    });
+
+    await scenario('Provider Poll: Kie HTTP 200 with unrecognized state -> transient, keeps waiting', async () => {
+      const job = await waitingJob('kie');
+      await new Engine(POLL, { db, http: mockHttp([[() => true, () => ({ statusCode: 200, body: { code: 200, data: { taskId: 'kie-task-poll', state: 'reticulating' } } })]], []) }).run('Manual Trigger');
+      const j = await jobRow(job.id);
+      const ev = await eventsOf(job.id);
+      check('unknown state: stays WAITING_PROVIDER with warning', j.status === 'WAITING_PROVIDER' && ev.some((x) => x.event_type === 'PROVIDER_POLL_WARNING' && /reticulating/.test(x.message)), j.status);
+      check('unknown state: no asset created', (await q(`select count(*)::int n from video_factory.assets where generation_job_id = $1`, [job.id]))[0].n === 0);
+    });
+
+    await scenario('Provider Poll: Kie HTTP 401 -> transient, task state untouched', async () => {
+      const job = await waitingJob('kie');
+      await new Engine(POLL, { db, http: mockHttp([[() => true, () => ({ statusCode: 401, body: { code: 401, msg: 'unauthorized' } })]], []) }).run('Manual Trigger');
+      const j = await jobRow(job.id);
+      check('HTTP 401: job not failed, stays WAITING_PROVIDER', j.status === 'WAITING_PROVIDER' && j.attempts === 1, j.status);
+    });
+
+    await scenario('Provider Poll: Kie HTTP 429 -> transient, task state untouched', async () => {
+      const job = await waitingJob('kie');
+      await new Engine(POLL, { db, http: mockHttp([[() => true, () => ({ statusCode: 429, body: 'rate limited' })]], []) }).run('Manual Trigger');
+      const j = await jobRow(job.id);
+      check('HTTP 429: job not failed, stays WAITING_PROVIDER', j.status === 'WAITING_PROVIDER', j.status);
+    });
+
     await scenario('Provider Poll: poll timeout -> FAILED without calling provider', async () => {
       const job = await waitingJob('fal', '2 hours');
       const calls = [];

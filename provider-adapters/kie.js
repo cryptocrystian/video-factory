@@ -133,17 +133,35 @@ function vfKieStatusRequest(attempt) {
   return { method: 'GET', url: VF_KIE_BASE + '/api/v1/jobs/recordInfo?taskId=' + encodeURIComponent(attempt.external_job_id) };
 }
 
+const VF_KIE_TASK_STATES = ['waiting', 'queuing', 'generating', 'success', 'fail'];
+// Codes that mean "ask again later" rather than "this task is broken".
+const VF_KIE_TRANSIENT_CODES = [429, 455, 500];
+
 function vfKieNormalizePoll(http) {
   if (!http.transport_ok) return { status: 'RUNNING', transient: true, error: 'Kie poll transport error: ' + http.transport_error, raw_response: null, result_urls: [], files: [] };
   const b = http.body || {};
   const code = Number(b.code != null ? b.code : http.status_code);
-  if (http.status_code >= 500 || http.status_code === 429 || code === 429 || code === 455 || code === 500 || http.status_code === 401 || code === 401) {
-    return { status: 'RUNNING', transient: true, error: 'Kie poll code ' + code, raw_response: vfSafeRaw(b), result_urls: [], files: [] };
+  const transient = (reason) => ({ status: 'RUNNING', transient: true, error: reason, raw_response: vfSafeRaw(b), result_urls: [], files: [] });
+
+  // 1. Transport/status level first: these say nothing about the task itself.
+  if (http.status_code === 401 || http.status_code === 403 || http.status_code === 429 || http.status_code >= 500) {
+    return transient('Kie poll HTTP ' + http.status_code);
   }
   const d = b.data;
-  if (code !== 200 || !d) {
-    return { status: 'FAILED', error: 'Kie poll code ' + code + ': ' + vfTruncate(b.msg || '', 300), raw_response: vfSafeRaw(b), result_urls: [], files: [] };
+  const hasState = Boolean(d) && VF_KIE_TASK_STATES.includes(d.state);
+  if (http.status_code >= 400 && !hasState) {
+    return { status: 'FAILED', error: 'Kie poll HTTP ' + http.status_code + ': ' + vfTruncate(b.msg || '', 300), raw_response: vfSafeRaw(b), result_urls: [], files: [] };
   }
+
+  // 2. On a 2xx response a valid task state is authoritative: Kie returns
+  //    envelope codes such as 505 alongside a completed task (see its
+  //    get-task-detail docs), so the state must win over body.code.
+  if (!hasState) {
+    if (VF_KIE_TRANSIENT_CODES.includes(code)) return transient('Kie poll code ' + code + ': ' + vfTruncate(b.msg || '', 200));
+    if (d && d.state != null) return transient('Kie state unrecognized: ' + vfTruncate(d.state, 40));
+    return { status: 'FAILED', error: 'Kie poll returned no task state (code ' + code + '): ' + vfTruncate(b.msg || '', 300), raw_response: vfSafeRaw(b), result_urls: [], files: [] };
+  }
+
   const credits = vfNum(d.creditsConsumed);
   switch (d.state) {
     case 'waiting':
@@ -167,9 +185,7 @@ function vfKieNormalizePoll(http) {
         credits_consumed: credits,
       };
     }
-    case 'fail':
+    default: // 'fail'
       return { status: 'FAILED', error: 'Kie task failed: ' + vfTruncate((d.failCode || '') + ' ' + (d.failMsg || ''), 400).trim(), raw_response: vfSafeRaw(b), result_urls: [], files: [], credits_consumed: credits };
-    default:
-      return { status: 'RUNNING', transient: true, error: 'Kie state unrecognized: ' + vfTruncate(d.state, 40), raw_response: vfSafeRaw(b), result_urls: [], files: [] };
   }
 }
