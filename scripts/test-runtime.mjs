@@ -5,6 +5,9 @@
 //   - Provider HTTP is mocked; global fetch is disabled; no provider request is sent.
 //   - Aborts before touching anything if real PENDING / WAITING_PROVIDER jobs exist.
 //   - Fixtures use a throwaway episode; the real Episode 2 run is never referenced.
+//   - Optional --runtime-role=<role> runs every simulated workflow Postgres node
+//     under SET LOCAL ROLE on the SAME admin transaction. Fixtures remain admin-owned,
+//     so uncommitted fixtures are visible while RLS/grants are enforced for runtime SQL.
 //
 // It executes the BUILT workflow JSON (the artifact that is deployed) with a small
 // n8n-compatible interpreter for the node types those workflows use.
@@ -17,6 +20,12 @@ dotenv.config({ path: '.env.local', quiet: true });
 
 const realFetch = globalThis.fetch;
 globalThis.fetch = () => { throw new Error('Network disabled during dry-run tests'); };
+
+const runtimeRoleArg = process.argv.find((a) => a.startsWith('--runtime-role='));
+const RUNTIME_DB_ROLE = runtimeRoleArg ? runtimeRoleArg.slice('--runtime-role='.length) : null;
+if (RUNTIME_DB_ROLE && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(RUNTIME_DB_ROLE)) {
+  throw new Error('Invalid --runtime-role identifier');
+}
 
 const GEN = JSON.parse(fs.readFileSync('workflows/generation-worker.json', 'utf8'));
 const POLL = JSON.parse(fs.readFileSync('workflows/provider-poll.json', 'utf8'));
@@ -121,7 +130,9 @@ class Engine {
         const values = (Array.isArray(raw) ? raw : [raw]).filter((v) => v !== undefined).map((v) => (v !== null && typeof v === 'object' ? JSON.stringify(v) : v));
         try {
           await this.db.query('savepoint vf_node');
+          if (RUNTIME_DB_ROLE) await this.db.query(`set local role "${RUNTIME_DB_ROLE}"`);
           const r = await this.db.query(p.query, values);
+          if (RUNTIME_DB_ROLE) await this.db.query('reset role');
           await this.db.query('release savepoint vf_node');
           const rows = JSON.parse(JSON.stringify(r.rows)).map((json) => ({ json }));
           if (!rows.length) return [node.alwaysOutputData ? [{ json: {} }] : [], []];
@@ -217,6 +228,14 @@ async function main() {
   await q('begin');
   try {
     await q(`set local statement_timeout = '30s'`);
+
+    if (RUNTIME_DB_ROLE) {
+      await q('savepoint vf_role_probe');
+      await q(`set local role "${RUNTIME_DB_ROLE}"`);
+      const roleProbe = (await q('select current_user as current_user'))[0];
+      check('runtime-role harness executes workflow SQL as requested role', roleProbe.current_user === RUNTIME_DB_ROLE, roleProbe.current_user);
+      await q('rollback to savepoint vf_role_probe');
+    }
 
     // ---------------- Fixtures (rolled back) ----------------
     const brand = (await q(`select id from video_factory.brands where slug = 'synthetic-frontier'`))[0];
@@ -583,6 +602,7 @@ async function main() {
   await db.end();
 
   const failed = results.filter((r) => !r.ok);
+  if (RUNTIME_DB_ROLE) console.log(`Runtime Postgres nodes executed under role: ${RUNTIME_DB_ROLE}`);
   console.log(`\n${results.length - failed.length}/${results.length} checks passed`);
   if (failed.length) {
     for (const f of failed) console.log(`FAILED: ${f.name} ${f.detail}`);
