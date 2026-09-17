@@ -2,7 +2,6 @@ import process from 'node:process';
 import dotenv from 'dotenv';
 
 dotenv.config({ path: '.env.local' });
-dotenv.config();
 
 if (!process.env.N8N_BASE_URL || !process.env.N8N_API_KEY) {
   throw new Error('N8N_BASE_URL and N8N_API_KEY are required');
