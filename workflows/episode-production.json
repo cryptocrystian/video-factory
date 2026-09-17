@@ -1,0 +1,127 @@
+{
+  "name": "VF - Episode Production v1",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "vf-ep-manual-trigger",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {"jsCode": "return items.map(item => ({ json: { ...item.json, vf_workflow: 'episode_production', vf_stage: 'initialize', vf_scaffold: true } }));"},
+      "id": "vf-ep-initialize",
+      "name": "Initialize",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [220, 0]
+    },
+    {
+      "parameters": {"jsCode": "return items.map(item => ({ json: { ...item.json, vf_stage: 'research_and_script' } }));"},
+      "id": "vf-ep-research-script",
+      "name": "Research and Script",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [440, 0]
+    },
+    {
+      "parameters": {"jsCode": "return items.map(item => ({ json: { ...item.json, vf_stage: 'scene_plan' } }));"},
+      "id": "vf-ep-scene-plan",
+      "name": "Scene Plan",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [660, 0]
+    },
+    {
+      "parameters": {"jsCode": "return items.map(item => ({ json: { ...item.json, vf_stage: 'shot_plan' } }));"},
+      "id": "vf-ep-shot-plan",
+      "name": "Shot Plan",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [880, 0]
+    },
+    {
+      "parameters": {"jsCode": "return items.map(item => ({ json: { ...item.json, vf_stage: 'narration' } }));"},
+      "id": "vf-ep-narration",
+      "name": "Narration",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1100, 0]
+    },
+    {
+      "parameters": {"jsCode": "return items.map(item => ({ json: { ...item.json, vf_stage: 'generate_visuals' } }));"},
+      "id": "vf-ep-visuals",
+      "name": "Generate Visuals",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1320, 0]
+    },
+    {
+      "parameters": {"jsCode": "return items.map(item => ({ json: { ...item.json, vf_stage: 'assemble' } }));"},
+      "id": "vf-ep-assemble",
+      "name": "Assemble",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1540, 0]
+    },
+    {
+      "parameters": {"jsCode": "return items.map(item => ({ json: { ...item.json, vf_stage: 'qc' } }));"},
+      "id": "vf-ep-qc",
+      "name": "QC",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1760, 0]
+    },
+    {
+      "parameters": {"jsCode": "return items.map(item => ({ json: { ...item.json, vf_stage: 'approval', vf_requires_human_approval: true } }));"},
+      "id": "vf-ep-approval",
+      "name": "Approval Gate",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1980, 0]
+    },
+    {
+      "parameters": {"jsCode": "return items.map(item => ({ json: { ...item.json, vf_stage: 'shorts' } }));"},
+      "id": "vf-ep-shorts",
+      "name": "Shorts",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2200, 0]
+    },
+    {
+      "parameters": {"jsCode": "return items.map(item => ({ json: { ...item.json, vf_stage: 'package' } }));"},
+      "id": "vf-ep-package",
+      "name": "Package",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2420, 0]
+    },
+    {
+      "parameters": {"jsCode": "return items.map(item => ({ json: { ...item.json, vf_stage: 'publish', vf_requires_publish_approval: true } }));"},
+      "id": "vf-ep-publish",
+      "name": "Publish Gate",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2640, 0]
+    }
+  ],
+  "connections": {
+    "Manual Trigger": {"main": [[{"node": "Initialize", "type": "main", "index": 0}]]},
+    "Initialize": {"main": [[{"node": "Research and Script", "type": "main", "index": 0}]]},
+    "Research and Script": {"main": [[{"node": "Scene Plan", "type": "main", "index": 0}]]},
+    "Scene Plan": {"main": [[{"node": "Shot Plan", "type": "main", "index": 0}]]},
+    "Shot Plan": {"main": [[{"node": "Narration", "type": "main", "index": 0}]]},
+    "Narration": {"main": [[{"node": "Generate Visuals", "type": "main", "index": 0}]]},
+    "Generate Visuals": {"main": [[{"node": "Assemble", "type": "main", "index": 0}]]},
+    "Assemble": {"main": [[{"node": "QC", "type": "main", "index": 0}]]},
+    "QC": {"main": [[{"node": "Approval Gate", "type": "main", "index": 0}]]},
+    "Approval Gate": {"main": [[{"node": "Shorts", "type": "main", "index": 0}]]},
+    "Shorts": {"main": [[{"node": "Package", "type": "main", "index": 0}]]},
+    "Package": {"main": [[{"node": "Publish Gate", "type": "main", "index": 0}]]}
+  },
+  "settings": {},
+  "staticData": null,
+  "pinData": {},
+  "meta": {"videoFactoryManaged": true, "implementationState": "scaffold", "safeToActivate": false}
+}
