@@ -1,0 +1,24 @@
+{
+  "name": "VF - Generation Worker v1",
+  "nodes": [
+    {"parameters": {}, "id": "vf-gen-manual-trigger", "name": "Manual Trigger", "type": "n8n-nodes-base.manualTrigger", "typeVersion": 1, "position": [0, 0]},
+    {"parameters": {"jsCode": "return items.map(item => ({ json: { ...item.json, vf_workflow: 'generation_worker', vf_stage: 'claim_generation_job', vf_scaffold: true } }));"}, "id": "vf-gen-claim", "name": "Claim Generation Job", "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [240, 0]},
+    {"parameters": {"jsCode": "return items.map(item => ({ json: { ...item.json, vf_stage: 'resolve_quality_first_route' } }));"}, "id": "vf-gen-route", "name": "Resolve Quality-First Route", "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [480, 0]},
+    {"parameters": {"jsCode": "return items.map(item => ({ json: { ...item.json, vf_stage: 'create_generation_attempt' } }));"}, "id": "vf-gen-attempt", "name": "Create Generation Attempt", "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [720, 0]},
+    {"parameters": {"jsCode": "return items.map(item => ({ json: { ...item.json, vf_stage: 'submit_provider_request', vf_external_side_effects_enabled: false } }));"}, "id": "vf-gen-submit", "name": "Submit Provider Request", "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [960, 0]},
+    {"parameters": {"jsCode": "return items.map(item => ({ json: { ...item.json, vf_stage: 'normalize_provider_result' } }));"}, "id": "vf-gen-normalize", "name": "Normalize Provider Result", "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [1200, 0]},
+    {"parameters": {"jsCode": "return items.map(item => ({ json: { ...item.json, vf_stage: 'persist_asset_lineage_cost_or_wait' } }));"}, "id": "vf-gen-persist", "name": "Persist Asset Lineage Cost or Wait", "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [1440, 0]}
+  ],
+  "connections": {
+    "Manual Trigger": {"main": [[{"node": "Claim Generation Job", "type": "main", "index": 0}]]},
+    "Claim Generation Job": {"main": [[{"node": "Resolve Quality-First Route", "type": "main", "index": 0}]]},
+    "Resolve Quality-First Route": {"main": [[{"node": "Create Generation Attempt", "type": "main", "index": 0}]]},
+    "Create Generation Attempt": {"main": [[{"node": "Submit Provider Request", "type": "main", "index": 0}]]},
+    "Submit Provider Request": {"main": [[{"node": "Normalize Provider Result", "type": "main", "index": 0}]]},
+    "Normalize Provider Result": {"main": [[{"node": "Persist Asset Lineage Cost or Wait", "type": "main", "index": 0}]]}
+  },
+  "settings": {},
+  "staticData": null,
+  "pinData": {},
+  "meta": {"videoFactoryManaged": true, "implementationState": "scaffold", "safeToActivate": false}
+}
