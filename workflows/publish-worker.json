@@ -1,0 +1,22 @@
+{
+  "name": "VF - Publish Worker v1",
+  "nodes": [
+    {"parameters": {}, "id": "vf-publish-manual-trigger", "name": "Manual Trigger", "type": "n8n-nodes-base.manualTrigger", "typeVersion": 1, "position": [0, 0]},
+    {"parameters": {"jsCode": "return items.map(item => ({ json: { ...item.json, vf_workflow: 'publish_worker', vf_stage: 'claim_publish_job', vf_scaffold: true } }));"}, "id": "vf-publish-claim", "name": "Claim Publish Job", "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [240, 0]},
+    {"parameters": {"jsCode": "return items.map(item => ({ json: { ...item.json, vf_stage: 'verify_publish_approval', vf_requires_publish_approval: true } }));"}, "id": "vf-publish-verify-approval", "name": "Verify Publish Approval", "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [480, 0]},
+    {"parameters": {"jsCode": "return items.map(item => ({ json: { ...item.json, vf_stage: 'verify_render_and_schedule' } }));"}, "id": "vf-publish-verify-render", "name": "Verify Render and Schedule", "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [720, 0]},
+    {"parameters": {"jsCode": "return items.map(item => ({ json: { ...item.json, vf_stage: 'publish_external', vf_external_side_effects_enabled: false } }));"}, "id": "vf-publish-external", "name": "Publish External", "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [960, 0]},
+    {"parameters": {"jsCode": "return items.map(item => ({ json: { ...item.json, vf_stage: 'persist_publish_event' } }));"}, "id": "vf-publish-persist", "name": "Persist Publish Event", "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [1200, 0]}
+  ],
+  "connections": {
+    "Manual Trigger": {"main": [[{"node": "Claim Publish Job", "type": "main", "index": 0}]]},
+    "Claim Publish Job": {"main": [[{"node": "Verify Publish Approval", "type": "main", "index": 0}]]},
+    "Verify Publish Approval": {"main": [[{"node": "Verify Render and Schedule", "type": "main", "index": 0}]]},
+    "Verify Render and Schedule": {"main": [[{"node": "Publish External", "type": "main", "index": 0}]]},
+    "Publish External": {"main": [[{"node": "Persist Publish Event", "type": "main", "index": 0}]]}
+  },
+  "settings": {},
+  "staticData": null,
+  "pinData": {},
+  "meta": {"videoFactoryManaged": true, "implementationState": "scaffold", "safeToActivate": false}
+}
