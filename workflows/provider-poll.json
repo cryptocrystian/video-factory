@@ -1,0 +1,22 @@
+{
+  "name": "VF - Provider Poll v1",
+  "nodes": [
+    {"parameters": {}, "id": "vf-poll-manual-trigger", "name": "Manual Trigger", "type": "n8n-nodes-base.manualTrigger", "typeVersion": 1, "position": [0, 0]},
+    {"parameters": {"jsCode": "return items.map(item => ({ json: { ...item.json, vf_workflow: 'provider_poll', vf_stage: 'load_waiting_provider_job', vf_scaffold: true } }));"}, "id": "vf-poll-load", "name": "Load Waiting Provider Job", "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [240, 0]},
+    {"parameters": {"jsCode": "return items.map(item => ({ json: { ...item.json, vf_stage: 'resolve_provider_adapter' } }));"}, "id": "vf-poll-adapter", "name": "Resolve Provider Adapter", "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [480, 0]},
+    {"parameters": {"jsCode": "return items.map(item => ({ json: { ...item.json, vf_stage: 'poll_provider', vf_external_side_effects_enabled: false } }));"}, "id": "vf-poll-provider", "name": "Poll Provider", "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [720, 0]},
+    {"parameters": {"jsCode": "return items.map(item => ({ json: { ...item.json, vf_stage: 'normalize_poll_result' } }));"}, "id": "vf-poll-normalize", "name": "Normalize Poll Result", "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [960, 0]},
+    {"parameters": {"jsCode": "return items.map(item => ({ json: { ...item.json, vf_stage: 'persist_completion_or_failure' } }));"}, "id": "vf-poll-persist", "name": "Persist Completion or Failure", "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [1200, 0]}
+  ],
+  "connections": {
+    "Manual Trigger": {"main": [[{"node": "Load Waiting Provider Job", "type": "main", "index": 0}]]},
+    "Load Waiting Provider Job": {"main": [[{"node": "Resolve Provider Adapter", "type": "main", "index": 0}]]},
+    "Resolve Provider Adapter": {"main": [[{"node": "Poll Provider", "type": "main", "index": 0}]]},
+    "Poll Provider": {"main": [[{"node": "Normalize Poll Result", "type": "main", "index": 0}]]},
+    "Normalize Poll Result": {"main": [[{"node": "Persist Completion or Failure", "type": "main", "index": 0}]]}
+  },
+  "settings": {},
+  "staticData": null,
+  "pinData": {},
+  "meta": {"videoFactoryManaged": true, "implementationState": "scaffold", "safeToActivate": false}
+}
