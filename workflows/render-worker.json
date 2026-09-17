@@ -1,0 +1,20 @@
+{
+  "name": "VF - Render Worker v1",
+  "nodes": [
+    {"parameters": {}, "id": "vf-render-manual-trigger", "name": "Manual Trigger", "type": "n8n-nodes-base.manualTrigger", "typeVersion": 1, "position": [0, 0]},
+    {"parameters": {"jsCode": "return items.map(item => ({ json: { ...item.json, vf_workflow: 'render_worker', vf_stage: 'claim_render_job', vf_scaffold: true } }));"}, "id": "vf-render-claim", "name": "Claim Render Job", "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [240, 0]},
+    {"parameters": {"jsCode": "return items.map(item => ({ json: { ...item.json, vf_stage: 'load_existing_source_assets' } }));"}, "id": "vf-render-load", "name": "Load Existing Source Assets", "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [480, 0]},
+    {"parameters": {"jsCode": "return items.map(item => ({ json: { ...item.json, vf_stage: 'deterministic_render', vf_provider_regeneration_allowed: false } }));"}, "id": "vf-render-execute", "name": "Deterministic Render", "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [720, 0]},
+    {"parameters": {"jsCode": "return items.map(item => ({ json: { ...item.json, vf_stage: 'persist_render_and_qc_artifacts' } }));"}, "id": "vf-render-persist", "name": "Persist Render and QC Artifacts", "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [960, 0]}
+  ],
+  "connections": {
+    "Manual Trigger": {"main": [[{"node": "Claim Render Job", "type": "main", "index": 0}]]},
+    "Claim Render Job": {"main": [[{"node": "Load Existing Source Assets", "type": "main", "index": 0}]]},
+    "Load Existing Source Assets": {"main": [[{"node": "Deterministic Render", "type": "main", "index": 0}]]},
+    "Deterministic Render": {"main": [[{"node": "Persist Render and QC Artifacts", "type": "main", "index": 0}]]}
+  },
+  "settings": {},
+  "staticData": null,
+  "pinData": {},
+  "meta": {"videoFactoryManaged": true, "implementationState": "scaffold", "safeToActivate": false}
+}
