@@ -4,7 +4,6 @@ import process from 'node:process';
 import dotenv from 'dotenv';
 
 dotenv.config({ path: '.env.local' });
-dotenv.config();
 
 const root = process.cwd();
 const manifest = JSON.parse(
