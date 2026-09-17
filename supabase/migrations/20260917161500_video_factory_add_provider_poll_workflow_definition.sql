@@ -19,4 +19,4 @@ values (
   ),
   true
 )
-on conflict (workflow_name) do nothing;
+on conflict (workflow_name, version) do nothing;
