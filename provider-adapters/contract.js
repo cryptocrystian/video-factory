@@ -166,10 +166,10 @@ function vfHttpResult(item) {
     if (typeof body === 'string') {
       try { body = JSON.parse(body); } catch (e) { /* keep text */ }
     }
-    return { transport_ok: true, status_code: j.statusCode, body, transport_error: null };
+    return { transport_ok: true, status_code: j.statusCode, body, headers: j.headers || {}, transport_error: null };
   }
   const message = (j.error && (j.error.message || j.error.description)) || j.message || 'HTTP request failed before a response was received';
-  return { transport_ok: false, status_code: null, body: null, transport_error: vfTruncate(message, 500) };
+  return { transport_ok: false, status_code: null, body: null, headers: {}, transport_error: vfTruncate(message, 500) };
 }
 
 // Strip anything that could carry authentication material before persisting a

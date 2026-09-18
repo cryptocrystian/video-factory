@@ -27,9 +27,9 @@ att as (
   returning a.id, a.attempt_number
 ),
 new_assets as (
-  insert into video_factory.assets (brand_id, episode_id, scene_id, shot_id, generation_job_id, asset_type, uri, storage_provider, mime_type, size_bytes, duration_seconds, width, height, is_primary, metadata)
+  insert into video_factory.assets (brand_id, episode_id, scene_id, shot_id, generation_job_id, asset_type, uri, storage_provider, storage_state, mime_type, size_bytes, duration_seconds, width, height, is_primary, metadata)
   select guard.brand_id, guard.episode_id, guard.scene_id, guard.shot_id, guard.id,
-         p.v->>'asset_type', f.value->>'url', p.v->>'storage_provider', f.value->>'mime_type',
+         p.v->>'asset_type', f.value->>'url', p.v->>'storage_provider', 'ARCHIVE_PENDING', f.value->>'mime_type',
          (f.value->>'size_bytes')::bigint, (f.value->>'duration_seconds')::numeric,
          (f.value->>'width')::int, (f.value->>'height')::int,
          f.ordinality = 1,

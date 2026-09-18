@@ -29,7 +29,8 @@ if (RUNTIME_DB_ROLE && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(RUNTIME_DB_ROLE)) {
 
 const GEN = JSON.parse(fs.readFileSync('workflows/generation-worker.json', 'utf8'));
 const POLL = JSON.parse(fs.readFileSync('workflows/provider-poll.json', 'utf8'));
-const LIB = ['contract.js', 'fal.js', 'kie.js', 'routing.js', 'runtime.js'].map((f) => fs.readFileSync(`provider-adapters/${f}`, 'utf8')).join('\n');
+const ARCHIVE = JSON.parse(fs.readFileSync('workflows/asset-archive.json', 'utf8'));
+const LIB = ['contract.js', 'fal.js', 'kie.js', 'routing.js', 'storage.js', 'runtime.js'].map((f) => fs.readFileSync(`provider-adapters/${f}`, 'utf8')).join('\n');
 const VF = new Function(`${LIB}\nreturn { vfSelectRoute, vfEstimateCost, VF_FAL_MAPPERS, VF_KIE_MAPPERS };`)();
 
 const results = [];
@@ -145,11 +146,21 @@ class Engine {
       }
       case 'n8n-nodes-base.httpRequest': {
         const url = this.evalExpr(p.url, items[0]);
-        const body = p.sendBody ? JSON.parse(this.evalExpr(p.jsonBody, items[0])) : undefined;
-        const call = { node: node.name, method: p.method, url, body, auth: p.genericAuthType };
+        const body = p.sendBody && p.specifyBody === 'json' ? JSON.parse(this.evalExpr(p.jsonBody, items[0])) : undefined;
+        const headers = p.sendHeaders ? JSON.parse(this.evalExpr(p.jsonHeaders, items[0])) : undefined;
+        const binaryField = p.contentType === 'binaryData' ? p.inputDataFieldName : null;
+        const binaryIn = binaryField ? ((items[0] || {}).binary || {})[binaryField] : undefined;
+        const call = { node: node.name, method: p.method, url, body, headers, auth: p.genericAuthType, binaryIn };
         try {
           const res = await this.http(call);
-          return [[{ json: { body: res.body, headers: {}, statusCode: res.statusCode, statusMessage: '' } }], []];
+          const respCfg = (p.options && p.options.response && p.options.response.response) || {};
+          const json = { headers: res.headers || {}, statusCode: res.statusCode, statusMessage: '' };
+          if (respCfg.responseFormat !== 'file') json.body = res.body;
+          const item = { json };
+          if (respCfg.responseFormat === 'file') {
+            item.binary = { [respCfg.outputPropertyName || 'data']: res.binary || { mimeType: (res.headers || {})['content-type'], fileSize: (res.headers || {})['content-length'] } };
+          }
+          return [[item], []];
         } catch (e) {
           if (node.onError === 'continueErrorOutput') return [[], [{ json: { error: { message: e.message } } }]];
           throw e;
@@ -177,7 +188,7 @@ class StopError extends Error {}
 // ---------------------------------------------------------------------------
 // Mock providers
 // ---------------------------------------------------------------------------
-const ALLOWED_HOSTS = new Set(['queue.fal.run', 'api.kie.ai']);
+const ALLOWED_HOSTS = new Set(['queue.fal.run', 'api.kie.ai', 'v3b.fal.media', 'storage.invalid']);
 function mockHttp(routes, calls) {
   return async (call) => {
     const host = new URL(call.url).host;
@@ -228,6 +239,14 @@ async function main() {
   await q('begin');
   try {
     await q(`set local statement_timeout = '30s'`);
+
+    // Apply repo migrations production has not applied yet, inside this rolled-back
+    // transaction, so pending DDL is exercised before the control plane applies it.
+    const appliedVersions = new Set((await q('select version from supabase_migrations.schema_migrations')).map((r) => r.version));
+    const pendingMigrations = fs.readdirSync('supabase/migrations').filter((f) => f.endsWith('.sql')).sort()
+      .filter((f) => !appliedVersions.has(f.split('_')[0]));
+    for (const f of pendingMigrations) await q(fs.readFileSync(`supabase/migrations/${f}`, 'utf8'));
+    check('pending migrations apply cleanly (rolled back)', true, pendingMigrations.length ? pendingMigrations.join(', ') : 'none pending');
 
     if (RUNTIME_DB_ROLE) {
       await q('savepoint vf_role_probe');
@@ -581,6 +600,186 @@ async function main() {
       const j = await jobRow(job.id);
       check('timeout: no provider call', calls.length === 0);
       check('timeout: job failed with PROVIDER_POLL_TIMEOUT', j.status === 'PENDING' && /PROVIDER_POLL_TIMEOUT/.test(j.last_error || ''), j.last_error);
+    });
+
+    // ---------------- PROCESSING crash recovery ----------------
+    const recoverSql = fs.readFileSync('runtime/sql/recover_stale_jobs.sql', 'utf8');
+    const recover = (worker = 'recovery-test') => q(recoverSql, [JSON.stringify({ worker_id: worker })]);
+    const staleJob = async (over = {}) => {
+      const job = await newJob({ status: 'PROCESSING', attempts: over.attempts ?? 1, worker_id: 'dead-worker', max_attempts: over.max_attempts,
+        external_job_id: over.external_job_id || null, offer_id: falOffer.id, model_id: falOffer.canonical_model_id });
+      await q(`update video_factory.generation_jobs set lease_expires_at = $2, submission_state = $3 where id = $1`,
+        [job.id, over.lease_expires_at || new Date(Date.now() - 60000), over.submission_state || 'NONE']);
+      if (over.attempt) {
+        await q(`insert into video_factory.generation_attempts (generation_job_id, attempt_number, status, external_job_id, request_payload, started_at)
+                 values ($1, $2, $3, $4, '{}'::jsonb, now() - interval '20 minutes')`,
+          [job.id, over.attempts ?? 1, over.attempt.status || 'STARTED', over.attempt.external_job_id || null]);
+      }
+      return job;
+    };
+
+    await scenario('Recovery: stale claim never submitted -> back to PENDING', async () => {
+      const job = await staleJob({ attempt: { status: 'STARTED' } });
+      const res = await recover();
+      const j = await jobRow(job.id);
+      const [att] = await attemptsOf(job.id);
+      const ev = await eventsOf(job.id);
+      check('stale claim: action RETURNED_TO_PENDING', res.length === 1 && res[0].action === 'RETURNED_TO_PENDING', JSON.stringify(res));
+      check('stale claim: job PENDING, lease cleared, attempts preserved', j.status === 'PENDING' && j.lease_expires_at === null && j.worker_id === null && j.attempts === 1 && j.recovery_count === 1, `${j.status} attempts=${j.attempts}`);
+      check('stale claim: open attempt cancelled', att.status === 'CANCELLED');
+      check('stale claim: GENERATION_RECOVERED warning event', ev.some((x) => x.event_type === 'GENERATION_RECOVERED' && x.severity === 'WARNING'));
+    });
+
+    await scenario('Recovery: submitted job is never resubmitted (job external id) -> polling', async () => {
+      const job = await staleJob({ external_job_id: 'fal-req-crash', submission_state: 'SUBMITTED', attempt: { status: 'STARTED', external_job_id: 'fal-req-crash' } });
+      const res = await recover();
+      const j = await jobRow(job.id);
+      const [att] = await attemptsOf(job.id);
+      check('submitted: action RECOVERED_TO_POLLING', res.length === 1 && res[0].action === 'RECOVERED_TO_POLLING' && res[0].external_job_id === 'fal-req-crash');
+      check('submitted: job WAITING_PROVIDER (not PENDING, so never reclaimed for submission)', j.status === 'WAITING_PROVIDER' && j.submission_state === 'SUBMITTED' && j.worker_id === null, j.status);
+      check('submitted: attempt handed to polling', att.status === 'WAITING_PROVIDER' && att.external_job_id === 'fal-req-crash');
+      check('submitted: attempt count unchanged (no second attempt)', (await attemptsOf(job.id)).length === 1);
+    });
+
+    await scenario('Recovery: external id only on the attempt row -> polling', async () => {
+      const job = await staleJob({ submission_state: 'SUBMITTING', attempt: { status: 'STARTED', external_job_id: 'fal-req-attempt-only' } });
+      const res = await recover();
+      const j = await jobRow(job.id);
+      check('attempt-only external id: recovered to polling', res[0] && res[0].action === 'RECOVERED_TO_POLLING' && j.status === 'WAITING_PROVIDER' && j.external_job_id === 'fal-req-attempt-only', `${res[0] && res[0].action} ${j.status}`);
+    });
+
+    await scenario('Recovery: uncertain submission is quarantined, never resubmitted', async () => {
+      const job = await staleJob({ submission_state: 'SUBMITTING', attempt: { status: 'STARTED' } });
+      const res = await recover();
+      const j = await jobRow(job.id);
+      const [att] = await attemptsOf(job.id);
+      const ev = await eventsOf(job.id);
+      check('uncertain: action QUARANTINED_UNCERTAIN', res[0] && res[0].action === 'QUARANTINED_UNCERTAIN');
+      check('uncertain: job FAILED (terminal) and flagged UNCERTAIN, never re-queued', j.status === 'FAILED' && j.submission_state === 'UNCERTAIN' && /REQUIRES_RECONCILIATION/.test(j.last_error || ''), `${j.status}/${j.submission_state}`);
+      check('uncertain: attempt FAILED with reconciliation note', att.status === 'FAILED' && /REQUIRES_RECONCILIATION/.test(att.error_message || ''));
+      check('uncertain: ERROR event requires_reconciliation', ev.some((x) => x.event_type === 'GENERATION_RECOVERED' && x.severity === 'ERROR' && x.data.requires_reconciliation === true));
+    });
+
+    await scenario('Recovery: non-stale PROCESSING job is untouched', async () => {
+      const job = await staleJob({ lease_expires_at: new Date(Date.now() + 600000) });
+      const res = await recover();
+      const j = await jobRow(job.id);
+      check('non-stale: nothing recovered', res.length === 0);
+      check('non-stale: still PROCESSING with its lease and worker', j.status === 'PROCESSING' && j.worker_id === 'dead-worker' && j.recovery_count === 0);
+    });
+
+    await scenario('Recovery: concurrent runs recover a job exactly once', async () => {
+      const job = await staleJob({ attempt: { status: 'STARTED' } });
+      const [a, b] = [await recover('worker-a'), await recover('worker-b')];
+      const j = await jobRow(job.id);
+      const ev = (await eventsOf(job.id)).filter((x) => x.event_type === 'GENERATION_RECOVERED');
+      check('concurrent: exactly one recovery transition', a.length === 1 && b.length === 0 && j.recovery_count === 1 && ev.length === 1, `a=${a.length} b=${b.length} count=${j.recovery_count}`);
+    });
+
+    await scenario('Recovery: max_attempts behaviour preserved after recovery', async () => {
+      const job = await staleJob({ attempts: 1, max_attempts: 1, attempt: { status: 'STARTED' } });
+      await recover();
+      const claimed = await q(fs.readFileSync('runtime/sql/claim_generation_job.sql', 'utf8'), [JSON.stringify({ worker_id: 'w' })]);
+      const failed = await q(fs.readFileSync('runtime/sql/fail_generation.sql', 'utf8'),
+        [JSON.stringify({ job_id: job.id, worker_id: 'w', attempt_id: null, error: 'post-recovery failure', stage: 'test', raw_response: null, routing_decision: null })]);
+      const j = await jobRow(job.id);
+      check('max_attempts: recovered job re-claimed once then DEAD (no retry loop)', claimed.length === 1 && j.status === 'DEAD' && j.attempts === 2 && failed[0].job_status === 'DEAD', `${j.status} attempts=${j.attempts}`);
+    });
+
+    await scenario('Recovery: Generation Worker workflow runs recovery before claiming', async () => {
+      const stale = await staleJob({ external_job_id: 'fal-req-e2e', submission_state: 'SUBMITTED', attempt: { status: 'STARTED', external_job_id: 'fal-req-e2e' } });
+      const calls = [];
+      const e = await new Engine(GEN, { db, http: mockHttp([], calls) }).run('Manual Trigger');
+      const j = await jobRow(stale.id);
+      check('e2e recovery: workflow executed Recover Stale Jobs', e.path.includes('Recover Stale Jobs'), e.path.slice(0, 5).join(' > '));
+      check('e2e recovery: stale job handed to polling, no provider call', j.status === 'WAITING_PROVIDER' && calls.length === 0);
+      check('e2e recovery: worker then found nothing to claim', e.path.at(-1) === 'No Job - Exit', e.path.at(-1));
+    });
+
+    // ---------------- Durable asset archival ----------------
+    const enableStorage = () => q(`update video_factory.providers set is_active = true, base_url = 'https://storage.invalid' where slug = 'supabase_storage'`);
+    const archivableAsset = async (over = {}) => {
+      const job = await newJob({ status: 'DONE', attempts: 1 });
+      const a = (await q(`insert into video_factory.assets (brand_id, episode_id, scene_id, shot_id, generation_job_id, asset_type, uri, storage_provider, storage_state, mime_type, is_primary)
+        values ($1,$2,$3,$4,$5,'VIDEO',$6,'fal',$7,'video/mp4',true) returning *`,
+        [brand.id, episode.id, scene.id, shot.id, job.id, over.uri || 'https://v3b.fal.media/files/dryrun/out.mp4', over.storage_state || 'ARCHIVE_PENDING']))[0];
+      return { job, asset: a };
+    };
+    const assetRow = async (id) => (await q('select * from video_factory.assets where id = $1', [id]))[0];
+    const DOWNLOAD_OK = [(c) => c.node === 'Download Provider Asset', () => ({ statusCode: 200, headers: { 'content-type': 'video/mp4', 'content-length': '5060895' }, binary: { mimeType: 'video/mp4', fileSize: '5060895' } })];
+    const UPLOAD_OK = [(c) => c.node === 'Upload To Durable Storage', () => ({ statusCode: 200, headers: { etag: '"d41d8cd98f00b204e9800998ecf8427e"' }, body: { Key: 'video-factory-assets/x' } })];
+
+    await scenario('Archive: storage backend disabled -> worker idles, claims nothing', async () => {
+      await archivableAsset();
+      const calls = [];
+      const e = await new Engine(ARCHIVE, { db, http: mockHttp([], calls) }).run('Manual Trigger');
+      check('archive disabled: nothing claimed, no HTTP', e.path.at(-1) === 'Nothing To Archive - Exit' && calls.length === 0, e.path.join(' > '));
+    });
+
+    await scenario('Archive: successful archival records durable URI and preserves provider URI', async () => {
+      await enableStorage();
+      const { asset } = await archivableAsset();
+      const calls = [];
+      const e = await new Engine(ARCHIVE, { db, http: mockHttp([DOWNLOAD_OK, UPLOAD_OK], calls) }).run('Manual Trigger');
+      const a = await assetRow(asset.id);
+      const ev = await q(`select event_type, severity, data from video_factory.production_events where entity_id = $1`, [asset.id]);
+      check('archive: downloaded then uploaded exactly once each', calls.length === 2 && calls[0].method === 'GET' && calls[1].method === 'POST', calls.map((c) => c.method).join(','));
+      check('archive: upload sent binary with upsert + content type', Boolean(calls[1].binaryIn) && calls[1].headers['x-upsert'] === 'true' && calls[1].headers['content-type'] === 'video/mp4');
+      check('archive: deterministic object key', a.archive_object_key === `episodes/${episode.id}/assets/${asset.id}.mp4`, a.archive_object_key);
+      check('archive: state ARCHIVED with durable URI', a.storage_state === 'ARCHIVED' && a.archive_uri === `https://storage.invalid/storage/v1/object/video-factory-assets/${a.archive_object_key}` && a.archived_at, `${a.storage_state} ${a.archive_uri}`);
+      check('archive: provider URI preserved', a.uri === 'https://v3b.fal.media/files/dryrun/out.mp4' && a.storage_provider === 'fal');
+      check('archive: size and checksum recorded', Number(a.archive_size_bytes) === 5060895 && a.archive_checksum === 'd41d8cd98f00b204e9800998ecf8427e' && a.archive_checksum_algorithm === 'etag');
+      check('archive: ASSET_ARCHIVED event', ev.some((x) => x.event_type === 'ASSET_ARCHIVED'));
+      check('archive: path ends at Persist Archive', e.path.at(-1) === 'Persist Archive', e.path.at(-1));
+    });
+
+    await scenario('Archive: re-run is idempotent (no second object, no duplicate asset)', async () => {
+      await enableStorage();
+      const { asset } = await archivableAsset();
+      const first = [];
+      await new Engine(ARCHIVE, { db, http: mockHttp([DOWNLOAD_OK, UPLOAD_OK], first) }).run('Manual Trigger');
+      const after1 = await assetRow(asset.id);
+      const second = [];
+      const e2 = await new Engine(ARCHIVE, { db, http: mockHttp([DOWNLOAD_OK, UPLOAD_OK], second) }).run('Manual Trigger');
+      const after2 = await assetRow(asset.id);
+      const count = (await q('select count(*)::int n from video_factory.assets where generation_job_id = $1', [after1.generation_job_id]))[0].n;
+      check('idempotent: second run claims nothing and uploads nothing', second.length === 0 && e2.path.at(-1) === 'Nothing To Archive - Exit', e2.path.at(-1));
+      check('idempotent: single asset row, unchanged archive fields', count === 1 && after2.archive_uri === after1.archive_uri && after2.archive_object_key === after1.archive_object_key);
+    });
+
+    await scenario('Archive: upload failure marks ARCHIVE_FAILED without touching the generation job', async () => {
+      await enableStorage();
+      const { job, asset } = await archivableAsset();
+      const calls = [];
+      await new Engine(ARCHIVE, { db, http: mockHttp([DOWNLOAD_OK, [(c) => c.node === 'Upload To Durable Storage', () => ({ statusCode: 500, body: 'storage unavailable' })]], calls) }).run('Manual Trigger');
+      const a = await assetRow(asset.id);
+      const j = await jobRow(job.id);
+      check('upload failure: asset ARCHIVE_FAILED with backoff', a.storage_state === 'ARCHIVE_FAILED' && a.archive_uri === null && a.archive_attempts === 1 && new Date(a.archive_run_after) > new Date(), `${a.storage_state} attempts=${a.archive_attempts}`);
+      check('upload failure: error recorded', /storage upload HTTP 500/.test(a.archive_last_error || ''), a.archive_last_error);
+      check('upload failure: generation job untouched (no regeneration path)', j.status === 'DONE' && j.attempts === 1);
+      check('upload failure: no duplicate asset rows', (await q('select count(*)::int n from video_factory.assets where generation_job_id = $1', [job.id]))[0].n === 1);
+    });
+
+    await scenario('Archive: retry after failure reuses the same object key', async () => {
+      await enableStorage();
+      const { asset } = await archivableAsset();
+      await new Engine(ARCHIVE, { db, http: mockHttp([DOWNLOAD_OK, [(c) => c.node === 'Upload To Durable Storage', () => ({ statusCode: 500, body: 'boom' })]], []) }).run('Manual Trigger');
+      await q(`update video_factory.assets set archive_run_after = now() - interval '1 minute' where id = $1`, [asset.id]);
+      const calls = [];
+      await new Engine(ARCHIVE, { db, http: mockHttp([DOWNLOAD_OK, UPLOAD_OK], calls) }).run('Manual Trigger');
+      const a = await assetRow(asset.id);
+      check('retry: archived on second pass, same deterministic key', a.storage_state === 'ARCHIVED' && a.archive_object_key === `episodes/${episode.id}/assets/${asset.id}.mp4` && a.archive_attempts === 2, `${a.storage_state} attempts=${a.archive_attempts}`);
+      check('retry: upload targeted the same object path', calls[1] && calls[1].url.endsWith(a.archive_object_key));
+    });
+
+    await scenario('Archive: provider download failure is recorded and retried later', async () => {
+      await enableStorage();
+      const { asset } = await archivableAsset();
+      const calls = [];
+      await new Engine(ARCHIVE, { db, http: mockHttp([[(c) => c.node === 'Download Provider Asset', () => ({ statusCode: 404, body: 'gone' })]], calls) }).run('Manual Trigger');
+      const a = await assetRow(asset.id);
+      check('download failure: no upload attempted', calls.length === 1);
+      check('download failure: ARCHIVE_FAILED with download stage error', a.storage_state === 'ARCHIVE_FAILED' && /download HTTP 404/.test(a.archive_last_error || ''), a.archive_last_error);
     });
 
     // Workflow JSON itself carries no credential values.

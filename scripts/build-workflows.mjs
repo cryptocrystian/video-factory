@@ -11,7 +11,7 @@ import path from 'node:path';
 import process from 'node:process';
 
 const root = process.cwd();
-const ADAPTER_FILES = ['contract.js', 'fal.js', 'kie.js', 'routing.js', 'runtime.js'];
+const ADAPTER_FILES = ['contract.js', 'fal.js', 'kie.js', 'routing.js', 'storage.js', 'runtime.js'];
 
 export function loadAdapterLibrary() {
   return ADAPTER_FILES.map((f) => fs.readFileSync(path.join(root, 'provider-adapters', f), 'utf8')).join('\n');
@@ -26,7 +26,13 @@ const CRED_NOTE = {
   postgres: 'Requires n8n credential VIDEO_FACTORY_POSTGRES (Video Factory runtime role; never the Music Factory credential).',
   fal: 'Requires n8n Header Auth credential VIDEO_FACTORY_FAL (Authorization: Key <fal key>).',
   kie: 'Requires n8n Header Auth credential VIDEO_FACTORY_KIE (Authorization: Bearer <Kie key>).',
+  storage: 'Requires n8n Header Auth credential VIDEO_FACTORY_SUPABASE_STORAGE (Authorization: Bearer <Supabase service key>); the target bucket must exist.',
 };
+
+// Build-time defaults only. base_url/bucket come from the providers row at runtime, so
+// no project URL is ever committed into workflow JSON.
+const MANIFEST = JSON.parse(fs.readFileSync(path.join(root, 'config', 'factory-manifest.json'), 'utf8'));
+const STORAGE_DEFAULTS = { backend: MANIFEST.storage.backend, path_template: MANIFEST.storage.path_template, public_read: MANIFEST.storage.public_read, cache_control: MANIFEST.storage.cache_control };
 
 function codeNode(id, name, position, body, withLib = true) {
   return {
@@ -45,14 +51,18 @@ function pgNode(id, name, position, queryName, replacement, opts = {}) {
   };
 }
 
-function httpNode(id, name, position, provider, method, urlExpr, bodyExpr) {
+function httpNode(id, name, position, provider, method, urlExpr, bodyExpr, extra = {}) {
   const parameters = {
     method,
     url: urlExpr,
     authentication: 'genericCredentialType',
     genericAuthType: 'httpHeaderAuth',
-    options: { response: { response: { fullResponse: true, neverError: true } }, timeout: 60000 },
+    options: { response: { response: { fullResponse: true, neverError: true } }, timeout: extra.timeout || 60000 },
   };
+  if (extra.responseFile) parameters.options.response.response.responseFormat = 'file';
+  if (extra.outputPropertyName) parameters.options.response.response.outputPropertyName = extra.outputPropertyName;
+  if (extra.headersExpr) Object.assign(parameters, { sendHeaders: true, specifyHeaders: 'json', jsonHeaders: extra.headersExpr });
+  if (extra.binaryField) Object.assign(parameters, { sendBody: true, contentType: 'binaryData', inputDataFieldName: extra.binaryField });
   if (bodyExpr) Object.assign(parameters, { sendBody: true, specifyBody: 'json', jsonBody: bodyExpr });
   return {
     parameters, id, name, type: 'n8n-nodes-base.httpRequest', typeVersion: 4.2, position,
@@ -121,9 +131,11 @@ function generationWorker() {
     { parameters: { rule: { interval: [{ field: 'minutes', minutesInterval: 1 }] } }, id: 'vf-gen-schedule', name: 'Every Minute', type: 'n8n-nodes-base.scheduleTrigger', typeVersion: 1.2, position: [0, 200] },
     codeNode('vf-gen-init', 'Init Worker', [X, 100],
       "const workerId = 'vf-generation-worker:' + $execution.id;\nreturn [{ json: { worker_id: workerId, db_payload: { worker_id: workerId } } }];", false),
-    pgNode('vf-gen-claim', 'Claim Generation Job', [X * 2, 100], 'claim_generation_job', '={{ [ $json.db_payload ] }}', { alwaysOutputData: true }),
-    ifNode('vf-gen-claimed', 'Job Claimed?', [X * 3, 100], '={{ Boolean($json.job && $json.job.id) }}'),
-    noOp('vf-gen-nojob', 'No Job - Exit', [X * 4, 300]),
+    pgNode('vf-gen-recover', 'Recover Stale Jobs', [X * 2, 100], 'recover_stale_jobs', '={{ [ $json.db_payload ] }}', { alwaysOutputData: true, errorOutput: true }),
+    pgNode('vf-gen-claim', 'Claim Generation Job', [X * 3, 100], 'claim_generation_job',
+      "={{ [ $('Init Worker').first().json.db_payload ] }}", { alwaysOutputData: true }),
+    ifNode('vf-gen-claimed', 'Job Claimed?', [X * 4, 100], '={{ Boolean($json.job && $json.job.id) }}'),
+    noOp('vf-gen-nojob', 'No Job - Exit', [X * 5, 300]),
     pgNode('vf-gen-context', 'Load Routing Context', [X * 4, 0], 'load_routing_context',
       "={{ [ { job_id: $json.job.id, worker_id: $('Init Worker').first().json.worker_id } ] }}", { errorOutput: true }),
     codeNode('vf-gen-route', 'Select Quality-First Route', [X * 5, 0],
@@ -177,7 +189,9 @@ function generationWorker() {
   const c = {};
   link(c, 'Manual Trigger', [['Init Worker']]);
   link(c, 'Every Minute', [['Init Worker']]);
-  link(c, 'Init Worker', [['Claim Generation Job']]);
+  link(c, 'Init Worker', [['Recover Stale Jobs']]);
+  // Recovery is best-effort: its error output still proceeds to the claim.
+  link(c, 'Recover Stale Jobs', [['Claim Generation Job'], ['Claim Generation Job']]);
   link(c, 'Claim Generation Job', [['Job Claimed?']]);
   link(c, 'Job Claimed?', [['Load Routing Context'], ['No Job - Exit']]);
   link(c, 'Load Routing Context', [['Select Quality-First Route'], ['Build Failure']]);
@@ -278,9 +292,91 @@ function providerPoll() {
   };
 }
 
+
+// ---------------------------------------------------------------------------
+// Durable archival runs in its own workflow so an archive failure can never
+// touch a generation job (and therefore can never cause a second paid call).
+function assetArchive() {
+  const X = 260;
+  const CFG = JSON.stringify(STORAGE_DEFAULTS);
+  const nodes = [
+    { parameters: {}, id: 'vf-arc-manual', name: 'Manual Trigger', type: 'n8n-nodes-base.manualTrigger', typeVersion: 1, position: [0, 0] },
+    { parameters: { rule: { interval: [{ field: 'minutes', minutesInterval: 5 }] } }, id: 'vf-arc-schedule', name: 'Every 5 Minutes', type: 'n8n-nodes-base.scheduleTrigger', typeVersion: 1.2, position: [0, 200] },
+    codeNode('vf-arc-init', 'Init Archiver', [X, 100],
+      "const workerId = 'vf-asset-archive:' + $execution.id;\nreturn [{ json: { worker_id: workerId, db_payload: { worker_id: workerId } } }];", false),
+    pgNode('vf-arc-claim', 'Claim Asset For Archive', [X * 2, 100], 'claim_asset_archive', '={{ [ $json.db_payload ] }}', { alwaysOutputData: true }),
+    ifNode('vf-arc-claimed', 'Asset Claimed?', [X * 3, 100], '={{ Boolean($json.asset && $json.asset.id) }}'),
+    noOp('vf-arc-none', 'Nothing To Archive - Exit', [X * 4, 300]),
+    codeNode('vf-arc-build', 'Build Archive Request', [X * 4, 0],
+      `return [{ json: vfStepBuildArchive($input.first().json, $('Init Archiver').first().json.worker_id, ${CFG}) }];`),
+    switchNode('vf-arc-route', 'Archive Route', [X * 5, 0], [
+      { key: 'archive', conditions: [['={{ $json.outcome }}', 'ARCHIVE']] },
+      { key: 'already_archived', conditions: [['={{ $json.outcome }}', 'ALREADY_ARCHIVED']] },
+    ]),
+    noOp('vf-arc-already', 'Already Archived - Exit', [X * 6, 200]),
+    httpNode('vf-arc-download', 'Download Provider Asset', [X * 6, -100], 'fal', 'GET',
+      '={{ $json.download_request.url }}', undefined, { responseFile: true, outputPropertyName: 'data', timeout: 120000 }),
+    codeNode('vf-arc-after-download', 'After Download', [X * 7, -100],
+      [
+        "const plan = $('Build Archive Request').first().json;",
+        'const item = $input.first().json;',
+        'const headers = item.headers || {};',
+        "const meta = { fileSize: headers['content-length'], mimeType: headers['content-type'] };",
+        '// binary must be returned explicitly or the downloaded bytes are dropped before upload',
+        'return [{ json: vfStepAfterDownload(plan, item, meta), binary: $input.first().binary }];',
+      ].join('\n')),
+    ifNode('vf-arc-downloaded', 'Download OK?', [X * 8, -100], "={{ $json.outcome === 'UPLOAD' }}"),
+    httpNode('vf-arc-upload', 'Upload To Durable Storage', [X * 9, -200], 'storage', 'POST',
+      "={{ $('Build Archive Request').first().json.upload_request.url }}", undefined,
+      { binaryField: 'data', headersExpr: "={{ JSON.stringify($('Build Archive Request').first().json.upload_request.headers) }}", timeout: 120000 }),
+    codeNode('vf-arc-after-upload', 'After Upload', [X * 10, -200],
+      `return [{ json: vfStepAfterUpload($('After Download').first().json, $input.first().json, Object.assign({}, ${CFG}, $('Build Archive Request').first().json.storage_config || {})) }];`),
+    ifNode('vf-arc-stored', 'Archive Stored?', [X * 11, -200], "={{ $json.outcome === 'ARCHIVED' }}"),
+    pgNode('vf-arc-persist', 'Persist Archive', [X * 12, -300], 'persist_archive', '={{ [ $json.persist_payload ] }}', { errorOutput: true }),
+    stopNode('vf-arc-stop', 'Stop - Archive Not Recorded', [X * 13, -300],
+      "={{ 'Object was uploaded but archive state was not recorded for asset ' + $('Build Archive Request').first().json.asset_id + '; the same object key is reused on retry. ' + ($json.message || '') }}"),
+    codeNode('vf-arc-failure', 'Build Archive Failure', [X * 10, 200],
+      [
+        'const input = $input.first().json;',
+        "const plan = $('Build Archive Request').first().json;",
+        'const payload = input.fail_payload || { asset_id: plan.asset_id, worker_id: plan.worker_id, stage: \'workflow\', error: vfErrorMessage(input) };',
+        'return [{ json: { fail_payload: payload } }];',
+      ].join('\n')),
+    pgNode('vf-arc-fail', 'Fail Archive', [X * 11, 200], 'fail_archive', '={{ [ $json.fail_payload ] }}'),
+  ];
+
+  const c = {};
+  link(c, 'Manual Trigger', [['Init Archiver']]);
+  link(c, 'Every 5 Minutes', [['Init Archiver']]);
+  link(c, 'Init Archiver', [['Claim Asset For Archive']]);
+  link(c, 'Claim Asset For Archive', [['Asset Claimed?']]);
+  link(c, 'Asset Claimed?', [['Build Archive Request'], ['Nothing To Archive - Exit']]);
+  link(c, 'Build Archive Request', [['Archive Route']]);
+  link(c, 'Archive Route', [['Download Provider Asset'], ['Already Archived - Exit'], ['Build Archive Failure']]);
+  link(c, 'Download Provider Asset', [['After Download'], ['After Download']]);
+  link(c, 'After Download', [['Download OK?']]);
+  link(c, 'Download OK?', [['Upload To Durable Storage'], ['Build Archive Failure']]);
+  link(c, 'Upload To Durable Storage', [['After Upload'], ['After Upload']]);
+  link(c, 'After Upload', [['Archive Stored?']]);
+  link(c, 'Archive Stored?', [['Persist Archive'], ['Build Archive Failure']]);
+  link(c, 'Persist Archive', [[], ['Stop - Archive Not Recorded']]);
+  link(c, 'Build Archive Failure', [['Fail Archive']]);
+
+  return {
+    name: 'VF - Asset Archive Worker v1',
+    nodes,
+    connections: c,
+    settings: SETTINGS,
+    staticData: null,
+    pinData: {},
+    meta: { videoFactoryManaged: true, implementationState: 'v1', safeToActivate: false, generatedBy: 'scripts/build-workflows.mjs' },
+  };
+}
+
 export const BUILDERS = {
   'workflows/generation-worker.json': generationWorker,
   'workflows/provider-poll.json': providerPoll,
+  'workflows/asset-archive.json': assetArchive,
 };
 
 if (import.meta.url === `file://${process.argv[1]}`) {

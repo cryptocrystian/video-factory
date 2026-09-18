@@ -9,7 +9,11 @@ upd as (
          provider_model_id = coalesce(o.provider_model_id, j.provider_model_id),
          routing_decision = p.v->'routing_decision',
          estimated_cost = coalesce((p.v->>'estimated_cost')::numeric, j.estimated_cost),
-         currency = coalesce(p.v->>'currency', j.currency)
+         currency = coalesce(p.v->>'currency', j.currency),
+         -- crash-recovery marker: set immediately before the provider call so a stale
+         -- PROCESSING job is quarantined for reconciliation instead of resubmitted
+         submission_state = 'SUBMITTING',
+         lease_expires_at = now() + interval '10 minutes'
     from p, video_factory.provider_model_offers o
    where j.id = (p.v->>'job_id')::uuid
      and j.status = 'PROCESSING'

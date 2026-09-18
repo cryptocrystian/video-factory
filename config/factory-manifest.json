@@ -44,8 +44,13 @@
     }
   },
   "providers": {
-    "production": ["fal", "kie"],
-    "interactivePrototypeOnly": ["higgsfield"],
+    "production": [
+      "fal",
+      "kie"
+    ],
+    "interactivePrototypeOnly": [
+      "higgsfield"
+    ],
     "providerSelection": "choose_model_first_then_choose_best_verified_provider_offer"
   },
   "workflows": [
@@ -83,6 +88,21 @@
       "file": "workflows/publish-worker.json",
       "managed": true,
       "activateOnDeploy": false
+    },
+    {
+      "key": "asset_archive",
+      "name": "VF - Asset Archive Worker v1",
+      "file": "workflows/asset-archive.json",
+      "managed": true,
+      "activateOnDeploy": false
     }
-  ]
+  ],
+  "storage": {
+    "backend": "supabase_storage",
+    "path_template": "episodes/{episode_id}/assets/{asset_id}.{ext}",
+    "public_read": false,
+    "cache_control": "max-age=31536000",
+    "runtime_config_source": "video_factory.providers where slug = supabase_storage (base_url + config.bucket); is_active is the archival kill switch",
+    "credential": "VIDEO_FACTORY_SUPABASE_STORAGE"
+  }
 }
