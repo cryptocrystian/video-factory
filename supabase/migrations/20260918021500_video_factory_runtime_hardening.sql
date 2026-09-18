@@ -45,6 +45,15 @@ as $function$
        from video_factory.generation_jobs
       where status = 'PENDING'
         and run_after <= now()
+        -- Global paid-generation kill switch: with every production adapter off,
+        -- workers idle without claiming jobs or consuming attempt budget.
+        and exists (
+          select 1
+          from video_factory.provider_adapters pa
+          join video_factory.providers pr on pr.id = pa.provider_id
+          where pa.is_active = true
+            and pr.is_active = true
+        )
       order by priority, run_after, created_at
       limit 1
       for update skip locked
@@ -229,7 +238,7 @@ create unique index if not exists assets_archive_object_key_uidx
 
 create index if not exists assets_archive_queue_idx
   on video_factory.assets (storage_state, archive_run_after)
-  where storage_state in ('ARCHIVE_PENDING', 'ARCHIVE_FAILED');
+  where storage_state in ('PROVIDER_HOSTED_NOT_YET_ARCHIVED', 'ARCHIVE_PENDING', 'ARCHIVE_FAILED');
 
 create or replace function video_factory.claim_next_asset_for_archive(p_worker_id text, p_lease_minutes integer default 10)
  returns setof video_factory.assets
@@ -248,7 +257,8 @@ as $function$
         and a.archive_uri is null
         and a.uri is not null
         and (
-          (a.storage_state in ('ARCHIVE_PENDING', 'ARCHIVE_FAILED') and a.archive_run_after <= now())
+          (a.storage_state in ('PROVIDER_HOSTED_NOT_YET_ARCHIVED', 'ARCHIVE_PENDING', 'ARCHIVE_FAILED')
+             and a.archive_run_after <= now())
           -- a lease that expired because the archive worker stopped mid-flight
           or (a.storage_state = 'ARCHIVING' and a.archive_run_after <= now())
         )
