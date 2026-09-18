@@ -342,19 +342,30 @@ async function main() {
       check('no-op writes nothing', s.jobs === before.jobs + 0 && s.attempts === before.attempts && s.events === before.events && s.cost === before.cost);
     });
 
-    // ---------------- 3. Adapters inactive (actual production state) ----------------
-    await scenario('Generation Worker: adapters inactive -> NO_ELIGIBLE_ROUTE -> fail_generation_job', async () => {
+    // ---------------- 3. Global kill switch: adapters inactive ----------------
+    await scenario('Generation Worker: all production adapters inactive -> job never claimed (kill switch)', async () => {
       const job = await newJob();
       const calls = [];
       const e = await new Engine(GEN, { db, http: mockHttp([], calls) }).run('Manual Trigger');
       const j = await jobRow(job.id);
+      check('kill switch: no provider call', calls.length === 0);
+      check('kill switch: worker exits cleanly without claiming', e.path.at(-1) === 'No Job - Exit', e.path.join(' > '));
+      check('kill switch: job untouched and still PENDING', j.status === 'PENDING' && j.attempts === 0 && j.worker_id === null && j.last_error === null, `${j.status} attempts=${j.attempts}`);
+      check('kill switch: no attempt row, no cost, no events', (await attemptsOf(job.id)).length === 0 && (await eventsOf(job.id)).length === 0);
+    });
+
+    await scenario('Generation Worker: adapter active but no capable offer -> NO_ELIGIBLE_ROUTE, no provider call', async () => {
+      // fal on, Kie off: a 1080p text-to-video shot has no capable fal offer.
+      await q(`update video_factory.provider_adapters pa set is_active = true from video_factory.providers p where p.id = pa.provider_id and p.slug = 'fal'`);
+      const job = await newJob({ input_manifest: [], parameters: { duration_seconds: 6 } });
+      const calls = [];
+      const e = await new Engine(GEN, { db, http: mockHttp([], calls) }).run('Manual Trigger');
+      const j = await jobRow(job.id);
       const ev = await eventsOf(job.id);
-      check('inactive adapters: no provider call', calls.length === 0);
-      check('inactive adapters: job returned to PENDING for retry', j.status === 'PENDING' && j.attempts === 1 && j.worker_id === null && new Date(j.run_after) > new Date(j.updated_at), `${j.status} attempts=${j.attempts}`);
-      check('inactive adapters: last_error explains route failure', /NO_ELIGIBLE_ROUTE/.test(j.last_error || ''), j.last_error);
-      check('inactive adapters: reason ADAPTER_INACTIVE recorded', JSON.stringify(ev).includes('ADAPTER_INACTIVE'));
-      check('inactive adapters: no attempt row', (await attemptsOf(job.id)).length === 0);
-      check('inactive adapters: path via Build Failure -> Fail Generation Job', e.path.includes('Fail Generation Job'), e.path.join(' > '));
+      check('no capable offer: no provider call', calls.length === 0);
+      check('no capable offer: job failed back to PENDING for retry', j.status === 'PENDING' && j.attempts === 1 && /NO_ELIGIBLE_ROUTE/.test(j.last_error || ''), `${j.status} ${j.last_error}`);
+      check('no capable offer: ADAPTER_INACTIVE recorded for the Kie offer', JSON.stringify(ev).includes('ADAPTER_INACTIVE'));
+      check('no capable offer: reached Fail Generation Job', e.path.includes('Fail Generation Job'));
     });
 
     await setAdapters(true);
@@ -703,6 +714,10 @@ async function main() {
       const a = (await q(`insert into video_factory.assets (brand_id, episode_id, scene_id, shot_id, generation_job_id, asset_type, uri, storage_provider, storage_state, mime_type, is_primary)
         values ($1,$2,$3,$4,$5,'VIDEO',$6,'fal',$7,'video/mp4',true) returning *`,
         [brand.id, episode.id, scene.id, shot.id, job.id, over.uri || 'https://v3b.fal.media/files/dryrun/out.mp4', over.storage_state || 'ARCHIVE_PENDING']))[0];
+      // Real assets awaiting archival would otherwise be claimed ahead of this fixture
+      // (they are older). Defer them inside this rolled-back transaction so the
+      // archive scenarios are deterministic.
+      await q(`update video_factory.assets set archive_run_after = now() + interval '1 day' where id <> $1 and archive_uri is null`, [a.id]);
       return { job, asset: a };
     };
     const assetRow = async (id) => (await q('select * from video_factory.assets where id = $1', [id]))[0];
