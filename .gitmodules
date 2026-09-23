@@ -1,0 +1,15 @@
+[submodule "skills/external/smixs-visual-skills"]
+	path = skills/external/smixs-visual-skills
+	url = https://github.com/smixs/visual-skills.git
+[submodule "skills/external/creative-director"]
+	path = skills/external/creative-director
+	url = https://github.com/smixs/creative-director-skill.git
+[submodule "skills/external/director-story-to-video"]
+	path = skills/external/director-story-to-video
+	url = https://github.com/artokun/comfyui-mcp.git
+[submodule "skills/external/remotion-skills"]
+	path = skills/external/remotion-skills
+	url = https://github.com/remotion-dev/skills.git
+[submodule "skills/external/kie-video-generator"]
+	path = skills/external/kie-video-generator
+	url = https://github.com/dandacompany/dantelabs-agentic-school.git
