@@ -1,170 +1,228 @@
-# Video Factory Production Runtime Contracts v1
+# Video Factory Production Runtime Contracts v2
 
-Status: Canonical structured contracts for the upgraded Synthetic Frontier production system.
+Status: **Canonical structured contracts**
+Supersedes: v1
 
-## Shot brief contract
+## 1. Canonical shot brief contract
 
-A shot brief is the machine-readable output of Director + Cinematography + Production Design.
+Persistence: `video_factory.shot_briefs`
 
-Required fields:
-- shot_id
-- version
-- status
-- story_purpose
-- emotional_objective
-- shot_class
-- source_mode
-- provenance_class
-- rights_class
-- shot_tier
-- camera_position
-- lens_character
-- framing
-- camera_movement
-- subject_movement
-- environment_movement
-- depth_parallax
-- lighting_start
-- lighting_evolution
-- focus_behavior
-- shot_endpoint
-- transition_in
-- transition_out
-- target_duration_seconds
-- continuity_package_id
-- capability_requirements
-- negative_constraints
-- evidence_refs
-- director_notes
+Existing explicit columns remain authoritative. The following v2 fields may initially live inside structured JSON metadata until promoted to dedicated columns:
 
-The canonical persistence table is `video_factory.shot_briefs`.
+- `shot_jobs[]`: EMOTION_OR_CURIOSITY_CHANGE | ACTION_OR_INFORMATION_ADVANCE | PRESSURE_SCALE_CONSEQUENCE
+- `viewer_question`
+- `obstacle_or_uncertainty`
+- `controlled_gaze`
+- `primary_camera_move`
+- `secondary_camera_adjustment`
+- `physical_detail.environmental_pressure`
+- `physical_detail.micro_action_or_state_change`
+- `physical_detail.sound_or_visual_anchor`
+- `final_frame_intent`
+- `priority_declaration.must_survive[]`
+- `priority_declaration.mandatory_beats[]`
+- `priority_declaration.may_vary[]`
 
-## Continuity package contract
+A shot cannot enter paid generation unless:
+- at least one shot job exists
+- final-frame intent exists for generated motion
+- camera motion is motivated
+- capability requirements are explicit
 
-Canonical persistence: `video_factory.continuity_packages`.
+## 2. Continuity package contract
 
-A package defines:
-- recurring subject identity
-- geometry
-- materials
-- scale
-- lighting states
-- signature features
-- prohibited mutations
-- canonical reference asset IDs
-- prompt anchors
+Persistence: `video_factory.continuity_packages`
 
-A recurring subject must not be independently redesigned by generation prompts.
+Add structured usage semantics:
+- canonical anchor asset(s)
+- derived-frame parentage
+- maximum preferred derivation depth
+- reference-role manifest
+- attributes each reference controls
+- attributes each reference must not control
+- exact-boundary chaining flag when terminal→start continuity is required
 
-## Previsualization contract
+Reference assets are inputs with roles, not generic inspiration buckets.
 
-Canonical persistence: `video_factory.previsualizations`.
+## 3. Previsualization contract
 
-Supported types:
+Persistence: `video_factory.previsualizations`
+
+Supported:
 - PAPER_EDIT
 - STORYBOARD
 - ANIMATIC
 - OTHER
 
-A hero sequence cannot enter unrestricted premium generation until a paper edit exists and storyboard/animatic gates are satisfied.
+Each storyboard/animatic panel should record:
+- story beat
+- function tag
+- controlled gaze / visual anchor
+- implied movement
+- expected transition
+- planned duration
 
-## Premium-spend justification contract
+A hero sequence cannot enter unrestricted premium generation until paper edit + storyboard/animatic gates are satisfied.
 
-Canonical persistence: `video_factory.premium_spend_justifications`.
+## 4. Canonical director brief
 
-Required:
-- episode / scene / shot
-- selected canonical model when known
-- one or more reason codes
-- narrative importance
-- expected screen seconds
-- capability need
-- lower-cost alternatives considered
-- why those alternatives are insufficient
-- expected incremental cost
-- approval state
+NEW logical contract.
 
-No justification = no automatic premium escalation.
+A canonical director brief is provider-independent and immutable by generation workers.
 
-## Model benchmark contract
+It includes:
+- narrative purpose
+- shot jobs
+- subject/environment
+- composition objective
+- physical behavior
+- camera/lens
+- light evolution
+- continuity constraints
+- reference-role manifest
+- final-frame intent
+- negative constraints
+- priorities
+- duration target
+- provenance/evidence limits
 
-Canonical persistence:
+The benchmark system and prompt compiler reference its version.
+
+## 5. Prompt compilation contract
+
+NEW logical contract.
+
+For each generation attempt preserve:
+- canonical brief ID/version
+- selected canonical model
+- selected provider offer
+- compiler version
+- model-adapter version
+- exact positive prompt
+- exact negative prompt
+- exact reference bindings + roles
+- exact provider parameters
+- unsupported canonical instructions removed or transformed
+- any required upstream change request
+
+The Prompt Compiler may alter syntax, not intent.
+
+Provider request payloads already persisted in generation attempts remain the final forensic record of what was submitted.
+
+## 6. Premium-spend justification
+
+Persistence: `video_factory.premium_spend_justifications`
+
+No premium escalation without:
+- capability reason
+- lower-cost alternative considered
+- insufficiency reason
+- incremental cost
+- approval
+
+## 7. Benchmark contract
+
+Persistence:
 - `video_factory.model_benchmark_runs`
 - `video_factory.model_benchmark_results`
 
-Each benchmark uses a fixed, versioned creative brief.
+Every benchmark declares:
+- `benchmark_type`: CREATIVE | CONTINUITY | SEQUENCE | RELIABILITY
+- one decision question
+- one falsifiable hypothesis
+- canonical director brief version
+- participating models
+- allowed model-native compilation rules
+- native duration/resolution
+- normalization method
+- automatic rejection conditions
+- one-attempt policy
+- blind labels
+- maximum spend
+- decision rule after results
 
-Each model result records:
-- model
-- provider offer
-- generation job
-- attempt number
-- acceptance status
-- dimension scores
-- failure codes
-- generated seconds
-- accepted screen seconds
-- generation cost
-- cleanup minutes
-- latency
-- notes
+### Creative benchmark
+- no shared start frame unless the thing being tested specifically requires one
+- models may interpret production design within the canonical brief
 
-Primary optimization metric: **cost per accepted production second**.
+### Continuity benchmark
+- shared approved reference is intentional
+- identity preservation is a primary scoring dimension
 
-## QC contract
+### Sequence benchmark
+- tests connected shots/editability, not isolated clip beauty
 
-Existing `video_factory.qc_reviews` is extended for:
-- shot_id
-- generation_job_id
-- decision: ACCEPT / REJECT / REPAIR
-- failure_codes[]
-- dimension_scores
-- repair_plan
-- provenance_class
-- rights_class
+Never use one benchmark to answer a different question.
 
-A paid result may be rejected without regard to sunk cost.
+## 8. QC contract
 
-## Rights gate
+Persistence: `video_factory.qc_reviews`
 
-Allowed final-master states:
-- OWNED
-- LICENSED
-- PUBLIC_DOMAIN
-- FAIR_USE_EDITORIAL
+In addition to current fields, QC should evaluate:
+- story-job completion
+- final-frame completion
+- camera-move coherence
+- reference-role adherence
+- priority preservation
+- unintended reference bleed
+- native-quality artifacts
+- normalized-review usefulness
 
-Blocking states:
-- PERMISSION_REQUIRED
-- UNKNOWN
+A result may be technically successful and still be creatively rejected.
 
-## Provenance gate
+## 9. Deterministic graphics/render contract
 
-Allowed internal classifications:
-- DOCUMENTED
-- RECONSTRUCTION
-- CONCEPT
-- SPECULATIVE
+Evidence-to-Visual produces a render spec containing:
+- composition ID
+- duration
+- dimensions/fps
+- brand tokens
+- source assets
+- text/data payload
+- animation timing
+- transition behavior
+- citations
+- expected deterministic output
 
-Generated visuals must never be silently presented as DOCUMENTED.
+Preferred executor:
+- Remotion for graphics/compositing/maps/captions
+- FFmpeg for simple deterministic media operations
 
-## Runtime implementation order
+Generative video is not the default graphics renderer.
 
-1. Director creates/updates shot brief.
-2. Continuity package resolved.
-3. Editor creates paper edit.
-4. Storyboard/animatic produced.
-5. Creative router reads capability requirements + benchmark evidence.
-6. Premium justification created when required.
-7. Generation/acquisition occurs.
-8. QC review records decision/failure codes.
-9. Accepted results enter edit.
-10. Benchmark/acceptance telemetry feeds future routing.
+## 10. Resume / idempotency contract
 
-## Current security posture
+Completed paid assets must never be regenerated merely because orchestration resumed.
 
-New production-intelligence tables:
-- have RLS enabled
-- are not exposed to anon/authenticated/public
-- are not automatically granted to the restricted generation runtime role
+Before rerun:
+- inspect existing attempts
+- inspect provider acceptance state
+- inspect archived assets
+- reuse approved outputs
+- rerun only failed/incomplete stage
 
-Worker grants should be added only when a concrete workflow requires them.
+## 11. Runtime order
+
+```
+story / facts
+→ canonical director brief
+→ paper edit / storyboard / animatic
+→ continuity resolution
+→ route by required capability
+→ compile model-native request
+→ spend authorization
+→ submit generation
+→ archive
+→ QC
+→ deterministic graphics / post
+→ edit
+```
+
+A downstream failure returns to the nearest owning layer:
+- bad idea → Director
+- bad timing → Editor
+- bad camera → Cinematography
+- drift → Continuity
+- unsupported request → Router / Prompt Compiler
+- provider failure → Adapter
+- technically good but visually weak → QC → creative redesign, not blind reroll
