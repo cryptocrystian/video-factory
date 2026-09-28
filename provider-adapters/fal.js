@@ -15,6 +15,7 @@ const VF_FAL_QUEUE_PATHS = {
   'minimax/h3-max-turbo/image-to-video': 'fal-ai/minimax-h3-turbo/max-turbo/image-to-video',
   'minimax/h3-max-turbo/text-to-video': 'fal-ai/minimax-h3-turbo/max-turbo/text-to-video',
   'minimax/h3-max/image-to-video': 'fal-ai/minimax-h3-turbo/image-to-video',
+  'minimax/h3-max/text-to-video': 'minimax/h3-max/text-to-video',
   'openai/gpt-image-2.5/sunburst/text-to-image': 'fal-ai/gpt-image-2.5-sunburst',
   'openai/gpt-image-2.5/sunburst/edit': 'fal-ai/gpt-image-2.5-sunburst/edit',
   'bytedance/seedance-2.5/image-to-video': 'fal-ai/seedance-2.5/image-to-video',
@@ -59,10 +60,34 @@ const VF_FAL_MAPPERS = {
     validate: vfFalMinimaxValidate(true),
     body: vfFalMinimaxBody(true),
   },
+  'minimax/h3-max/text-to-video': {
+    modes: ['text_to_video'],
+    validate: vfFalMinimaxValidate(false),
+    body: vfFalMinimaxBody(false),
+  },
   'minimax/h3-max-turbo/text-to-video': {
     modes: ['text_to_video'],
     validate: vfFalMinimaxValidate(false),
     body: vfFalMinimaxBody(false),
+  },
+  'fal-ai/kling-video/v3/pro/text-to-video': {
+    modes: ['text_to_video'],
+    validate(job, params) {
+      if (!job.prompt) return 'PROMPT_REQUIRED';
+      if (!vfIntInRange(vfRequestedDuration(params), 3, 15)) return 'DURATION_UNSUPPORTED_3_TO_15_INTEGER_SECONDS';
+      return null;
+    },
+    body(job, params, inputs, offer) {
+      return vfCompact({
+        prompt: job.prompt || undefined,
+        negative_prompt: job.negative_prompt || undefined,
+        duration: String(vfRequestedDuration(params)),
+        generate_audio: offer.audio_included === true,
+        shot_type: params.shot_type || 'customize',
+        aspect_ratio: params.aspect_ratio || '16:9',
+        cfg_scale: vfNum(params.cfg_scale) == null ? undefined : vfNum(params.cfg_scale),
+      });
+    },
   },
   'fal-ai/kling-video/v3/pro/image-to-video': {
     modes: ['image_to_video'],
@@ -81,6 +106,26 @@ const VF_FAL_MAPPERS = {
         // Explicit: fal defaults generate_audio to true, which is a different (higher) offer.
         generate_audio: offer.audio_included === true,
         cfg_scale: vfNum(params.cfg_scale) == null ? undefined : vfNum(params.cfg_scale),
+      });
+    },
+  },
+  'bytedance/seedance-2.5/us/text-to-video': {
+    modes: ['text_to_video'],
+    validate(job, params) {
+      if (!job.prompt) return 'PROMPT_REQUIRED';
+      if (!vfIntInRange(vfRequestedDuration(params), 4, 30)) return 'DURATION_UNSUPPORTED_4_TO_30_INTEGER_SECONDS';
+      return null;
+    },
+    body(job, params, inputs, offer) {
+      return vfCompact({
+        prompt: job.prompt,
+        duration: String(vfRequestedDuration(params)),
+        resolution: String(offer.resolution || params.resolution || '720p').toLowerCase(),
+        aspect_ratio: params.aspect_ratio || '16:9',
+        generate_audio: offer.audio_included === true,
+        bitrate_mode: params.bitrate_mode || 'high',
+        codec: params.codec || 'H264',
+        end_user_id: params.end_user_id || undefined,
       });
     },
   },
